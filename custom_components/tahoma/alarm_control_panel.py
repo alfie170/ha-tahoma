@@ -152,6 +152,13 @@ class TahomaAlarmControlPanel(TahomaDevice, AlarmControlPanelEntity):
             self.select_command(COMMAND_DISARM, COMMAND_ALARM_OFF)
         )
 
+        # MyFoxAlarmController doesn't reset alarm status on disarm
+        # https://github.com/iMicknl/ha-tahoma/issues/258
+        if self.device.widget == "MyFoxAlarmController":
+            await self.async_execute_command(
+                self.select_command(COMMAND_SET_ALARM_STATUS, STATE_UNDETECTED)
+            )
+
     async def async_alarm_arm_home(self, code=None):
         """Send arm home command."""
         await self.async_execute_command(
