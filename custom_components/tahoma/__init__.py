@@ -18,7 +18,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
-from pyhoma.client import TahomaClient
+from .client import TahomaClient
 from pyhoma.exceptions import (
     BadCredentialsException,
     MaintenanceException,
