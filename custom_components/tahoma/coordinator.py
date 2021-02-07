@@ -55,6 +55,7 @@ class TahomaDataUpdateCoordinator(DataUpdateCoordinator):
         self.client = client
         self.devices: Dict[str, Device] = {d.deviceurl: d for d in devices}
         self.executions: Dict[str, Dict[str, str]] = {}
+        self.refresh_in_progress = False
 
         _LOGGER.debug(
             "Initialized DataUpdateCoordinator with %s interval.", str(update_interval)
@@ -75,6 +76,7 @@ class TahomaDataUpdateCoordinator(DataUpdateCoordinator):
         except (ServerDisconnectedError, NotAuthenticatedException) as exception:
             _LOGGER.debug(exception)
             self.executions = {}
+            self.set_refresh_in_progress(False)
             await self.client.login()
             self.devices = await self._get_devices()
             return self.devices
@@ -122,8 +124,7 @@ class TahomaDataUpdateCoordinator(DataUpdateCoordinator):
             elif event.name == EventName.EXECUTION_REGISTERED:
                 if event.exec_id not in self.executions:
                     self.executions[event.exec_id] = {}
-
-                self.update_interval = timedelta(seconds=1)
+                self.set_update_interval(1)
 
             elif (
                 event.name == EventName.EXECUTION_STATE_CHANGED
@@ -132,8 +133,11 @@ class TahomaDataUpdateCoordinator(DataUpdateCoordinator):
             ):
                 del self.executions[event.exec_id]
 
-        if not self.executions:
-            self.update_interval = self.original_update_interval
+            elif event.name == EventName.REFRESH_ALL_DEVICES_STATES_COMPLETED:
+                self.set_refresh_in_progress(False)
+
+        if not self.executions and self.refresh_in_progress is False:
+            self.restore_update_interval()
 
         return self.devices
 
@@ -141,6 +145,18 @@ class TahomaDataUpdateCoordinator(DataUpdateCoordinator):
         """Fetch devices."""
         _LOGGER.debug("Fetching all devices and state via /setup/devices")
         return {d.deviceurl: d for d in await self.client.get_devices(refresh=True)}
+
+    def set_refresh_in_progress(self, state: bool) -> None:
+        """Set refresh in progress to argument value."""
+        self.refresh_in_progress = state
+
+    def set_update_interval(self, seconds: int = 1) -> None:
+        """Set update interval to argument value."""
+        self.update_interval = timedelta(seconds=seconds)
+
+    def restore_update_interval(self) -> None:
+        """Restore update interval to original update interval."""
+        self.update_interval = self.original_update_interval
 
     @staticmethod
     def _get_state(state: State) -> Union[float, int, bool, str, None]:
