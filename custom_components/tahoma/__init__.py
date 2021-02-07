@@ -1,7 +1,8 @@
 """The TaHoma integration."""
 import asyncio
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
+from enum import Enum
 import logging
 
 from aiohttp import ClientError, ServerDisconnectedError
@@ -10,7 +11,11 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_EXCLUDE, CONF_PASSWORD, CONF_SOURCE, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv, service
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    service,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from pyhoma.client import TahomaClient
@@ -109,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         await client.login()
         devices = await client.get_devices()
         scenarios = await client.get_scenarios()
+        gateways = await client.get_gateways()
     except BadCredentialsException:
         _LOGGER.error("invalid_auth")
         return False
@@ -130,7 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     tahoma_coordinator = TahomaDataUpdateCoordinator(
         hass,
         _LOGGER,
-        name="TaHoma Event Fetcher",
+        name="events",
         client=client,
         devices=devices,
         update_interval=timedelta(seconds=update_interval),
@@ -146,7 +152,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         if platform:
             entities[platform].append(device)
             _LOGGER.debug(
-                "Added TaHoma device (%s - %s - %s - %s)",
+                "Added device (%s - %s - %s - %s)",
                 device.controllable_name,
                 device.ui_class,
                 device.widget,
@@ -157,7 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             and device.ui_class not in IGNORED_TAHOMA_TYPES
         ):
             _LOGGER.debug(
-                "Unsupported TaHoma device detected (%s - %s - %s - %s)",
+                "Unsupported device detected (%s - %s - %s - %s)",
                 device.controllable_name,
                 device.ui_class,
                 device.widget,
@@ -170,6 +176,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     for platform in entities:
         hass.async_create_task(
             hass.config_entries.async_forward_entry_setup(entry, platform)
+        )
+
+    device_registry = await dr.async_get_registry(hass)
+
+    for gateway in gateways:
+        _LOGGER.debug(
+            "Added gateway (%s - %s - %s)",
+            gateway.id,
+            gateway.type,
+            gateway.sub_type,
+        )
+
+        gateway_model = (
+            beautify_name(gateway.sub_type.name)
+            if isinstance(gateway.sub_type, Enum)
+            else None
+        )
+        gateway_name = (
+            f"{beautify_name(gateway.type.name)} hub"
+            if isinstance(gateway.type, Enum)
+            else None
+        )
+
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, gateway.id)},
+            model=gateway_model,
+            manufacturer="Somfy",
+            name=gateway_name,
+            sw_version=gateway.connectivity.protocol_version,
         )
 
     async def handle_execute_command(call):
@@ -228,6 +264,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         "update_listener": entry.add_update_listener(update_listener),
         "task_refresh_state": task_refresh_state,
     }
+
+    async def handle_get_execution_history(call):
+        """Handle get execution history service."""
+        await write_execution_history_to_log(tahoma_coordinator.client)
+
+    service.async_register_admin_service(
+        hass,
+        DOMAIN,
+        "get_execution_history",
+        handle_get_execution_history,
+    )
 
     return True
 
@@ -301,3 +348,29 @@ def print_homekit_setup_code(device: Device):
 
         if homekit:
             _LOGGER.info("HomeKit support detected with setup code %s.", homekit.value)
+
+
+async def write_execution_history_to_log(client: TahomaClient):
+    """Retrieve execution history and write output to log."""
+    history = await client.get_execution_history()
+
+    for item in history:
+        timestamp = datetime.fromtimestamp(int(item.event_time) / 1000)
+
+        for command in item.commands:
+            date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+            _LOGGER.info(
+                "{timestamp}: {command} executed via {app} on {device}, with {parameters}.".format(
+                    command=command.command,
+                    timestamp=date,
+                    device=command.deviceurl,
+                    parameters=command.parameters,
+                    app=item.label,
+                )
+            )
+
+
+def beautify_name(name: str):
+    """Return human readable string."""
+    return name.replace("_", " ").title()
