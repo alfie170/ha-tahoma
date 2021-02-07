@@ -7,7 +7,7 @@ from aiohttp import ServerDisconnectedError
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from pyhoma.client import TahomaClient
+from .client import TahomaClient
 from pyhoma.enums import EventName, ExecutionState
 from pyhoma.exceptions import (
     BadCredentialsException,
